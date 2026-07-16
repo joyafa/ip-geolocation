@@ -1,10 +1,39 @@
 import ipaddress
 import requests
+import sys
+import os
+import socket
+import threading
 from flask import Flask, request, jsonify, render_template_string
-from geolite2 import geolite2
+import maxminddb
 
 app = Flask(__name__)
-reader = geolite2.reader()
+reader = None
+
+
+def init_geolite2():
+    global reader
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+        db_path = os.path.join(base_path, 'GeoLite2-City.mmdb')
+    else:
+        try:
+            from _maxminddb_geolite2 import geolite2_database
+            db_path = geolite2_database()
+        except ImportError:
+            db_path = os.path.join(os.path.dirname(__file__), 'GeoLite2-City.mmdb')
+    reader = maxminddb.open_database(db_path)
+
+
+def find_free_port(start_port=5000, max_attempts=100):
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('127.0.0.1', port))
+                return port
+        except OSError:
+            continue
+    raise RuntimeError("无法找到可用端口")
 
 CLOUD_PROVIDERS = {
     "aliyun": {
@@ -570,252 +599,319 @@ HTML_TEMPLATE = """
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
+            background: #1a1b26;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            padding-bottom: 40px;
+        }
+        .header {
             display: flex;
             align-items: center;
-            justify-content: center;
-            padding: 20px;
+            gap: 16px;
+            padding: 14px 20px;
+            background: #24253a;
+            border-bottom: 1px solid #2e3246;
         }
-        .container {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            padding: 40px;
-            max-width: 600px;
-            width: 100%;
+        .header h1 {
+            color: #8cb4ff;
+            font-size: 20px;
+            font-weight: 600;
         }
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 30px;
-            font-size: 28px;
+        .header p {
+            color: #7a8aa4;
+            font-size: 13px;
+        }
+        .main {
+            flex: 1;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow: hidden;
+        }
+        .search-area {
+            background: #24253a;
+            border-radius: 10px;
+            padding: 16px;
+            border: 1px solid #2e3246;
         }
         .search-box {
             display: flex;
-            gap: 10px;
-            margin-bottom: 30px;
+            gap: 12px;
         }
-        input {
+        .search-box input {
             flex: 1;
-            padding: 14px 18px;
-            border: 2px solid #e0e0e0;
+            padding: 12px 16px;
+            border: 1px solid #2e3246;
             border-radius: 8px;
-            font-size: 16px;
+            font-size: 15px;
             outline: none;
-            transition: border-color 0.3s;
+            background: #1f2335;
+            color: #e4eaf5;
+            transition: border-color 0.2s;
         }
-        input:focus {
-            border-color: #667eea;
+        .search-box input:focus {
+            border-color: #7aa2f7;
         }
-        button {
-            padding: 14px 28px;
-            background: #667eea;
+        .search-box input::placeholder {
+            color: #6b7a94;
+        }
+        .search-box button {
+            padding: 12px 22px;
+            background: linear-gradient(135deg, #7aa2f7 0%, #5d6af7 100%);
             color: white;
             border: none;
             border-radius: 8px;
-            font-size: 16px;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-        button:hover {
-            background: #5568d3;
-        }
-        .result {
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 24px;
-            display: none;
-        }
-        .result.show {
-            display: block;
-        }
-        .result-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 10px 0;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        .result-item:last-child {
-            border-bottom: none;
-        }
-        .result-label {
-            color: #666;
-            font-weight: 500;
-        }
-        .result-value {
-            color: #333;
+            font-size: 14px;
             font-weight: 600;
-            text-align: right;
-            max-width: 60%;
-            word-break: break-all;
+            cursor: pointer;
+            transition: all 0.2s;
+            min-width: 80px;
         }
-        .result-tag {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 500;
+        .search-box button:hover:not(:disabled) {
+            background: linear-gradient(135deg, #698ef7 0%, #4d5df7 100%);
         }
-        .tag-private {
-            background: #fff3cd;
-            color: #856404;
-        }
-        .tag-public {
-            background: #d4edda;
-            color: #155724;
-        }
-        .tag-cloud {
-            background: #cce5ff;
-            color: #004085;
-        }
-        .tag-isp {
-            background: #d1ecf1;
-            color: #0c5460;
-        }
-        .tag-education {
-            background: #e2e3e5;
-            color: #383d41;
-        }
-        .tag-research {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        .tag-finance {
-            background: #ffeeba;
-            color: #856404;
-        }
-        .tag-enterprise {
-            background: #d4edda;
-            color: #155724;
-        }
-        .data-source {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px dashed #e0e0e0;
-            font-size: 12px;
-            color: #999;
-            text-align: right;
+        .search-box button:disabled {
+            background: #414868;
+            cursor: not-allowed;
         }
         .error {
-            background: #fee;
-            color: #c33;
-            padding: 16px;
+            background: rgba(247, 140, 140, 0.1);
+            color: #ff9a9a;
+            padding: 12px 16px;
             border-radius: 8px;
+            font-size: 14px;
             display: none;
-            margin-bottom: 20px;
+            border: 1px solid rgba(247, 140, 140, 0.3);
         }
         .error.show {
             display: block;
         }
         .loading {
             text-align: center;
-            padding: 20px;
-            color: #666;
+            padding: 24px;
+            color: #7a8aa4;
+            font-size: 14px;
             display: none;
         }
         .loading.show {
             display: block;
         }
-        .api-info {
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid #e0e0e0;
-            font-size: 14px;
-            color: #666;
+        .loading .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #2e3246;
+            border-top-color: #7aa2f7;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 8px;
         }
-        .api-info h3 {
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .result {
+            display: none;
+            flex: 1;
+            display: none;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .result.show {
+            display: flex;
+        }
+        .card {
+            background: #24253a;
+            border-radius: 10px;
+            border: 1px solid #2e3246;
+            overflow: hidden;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .card-section {
+            padding: 14px 18px;
+        }
+        .card-section + .card-section {
+            border-top: 1px solid #2e3246;
+        }
+        .section-title {
+            font-size: 13px;
+            color: #8b9bb4;
+            font-weight: 600;
             margin-bottom: 10px;
-            color: #333;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        .api-info code {
-            background: #eef;
-            padding: 2px 6px;
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px 14px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 7px 0;
+        }
+        .info-label {
+            color: #8b9bb4;
+            font-size: 14px;
+            flex-shrink: 0;
+            width: 60px;
+        }
+        .info-value {
+            color: #e4eaf5;
+            font-size: 14px;
+            font-weight: 500;
+            text-align: right;
+            flex: 1;
+            margin-left: 10px;
+            word-break: break-all;
+        }
+        .tag {
+            display: inline-block;
+            padding: 3px 10px;
             border-radius: 4px;
-            font-family: monospace;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .tag-loopback { background: rgba(168, 85, 247, 0.2); color: #a855f7; }
+        .tag-private { background: rgba(250, 204, 21, 0.2); color: #facc15; }
+        .tag-public { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .tag-cloud { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+        .tag-isp { background: rgba(14, 165, 233, 0.2); color: #0ea5e9; }
+        .tag-education { background: rgba(148, 163, 184, 0.2); color: #94a3b8; }
+        .tag-research { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        .tag-finance { background: rgba(250, 204, 21, 0.2); color: #facc15; }
+        .tag-enterprise { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .data-source {
+            font-size: 12px;
+            color: #6b7a94;
+            text-align: center;
+            padding-top: 10px;
+            margin-top: auto;
+        }
+        .copyright {
+            font-size: 12px;
+            color: #6b7a94;
+            text-align: center;
+            padding: 10px 0;
+            border-top: 1px solid #2e3246;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #1a1b26;
         }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="header">
         <h1>🌍 IP归属地查询</h1>
-        <div class="search-box">
-            <input type="text" id="ipInput" placeholder="输入IP地址，留空查询当前IP">
-            <button onclick="queryIP()">查询</button>
-        </div>
-        <div class="error" id="errorBox"></div>
-        <div class="loading" id="loading">查询中...</div>
-        <div class="result" id="resultBox">
-            <div class="result-item">
-                <span class="result-label">IP地址</span>
-                <span class="result-value" id="resIp">-</span>
-            </div>
-            <div class="result-item">
-                <span class="result-label">IP类型</span>
-                <span class="result-value" id="resIpType">-</span>
-            </div>
-            <div class="result-item" id="resOrgTypeRow" style="display:none;">
-                <span class="result-label">机构类型</span>
-                <span class="result-value" id="resOrgType">-</span>
-            </div>
-            <div class="result-item" id="resOrgNameRow" style="display:none;">
-                <span class="result-label">机构/云服务商</span>
-                <span class="result-value" id="resOrgName">-</span>
-            </div>
-            <div class="result-item" id="resDescRow" style="display:none;">
-                <span class="result-label">描述</span>
-                <span class="result-value" id="resDesc">-</span>
-            </div>
-            <div class="result-item">
-                <span class="result-label">国家</span>
-                <span class="result-value" id="resCountry">-</span>
-            </div>
-            <div class="result-item">
-                <span class="result-label">省份/州</span>
-                <span class="result-value" id="resProvince">-</span>
-            </div>
-            <div class="result-item">
-                <span class="result-label">城市</span>
-                <span class="result-value" id="resCity">-</span>
-            </div>
-            <div class="result-item">
-                <span class="result-label">邮编</span>
-                <span class="result-value" id="resPostal">-</span>
-            </div>
-            <div class="result-item">
-                <span class="result-label">时区</span>
-                <span class="result-value" id="resTimezone">-</span>
-            </div>
-            <div class="result-item">
-                <span class="result-label">经纬度</span>
-                <span class="result-value" id="resCoords">-</span>
-            </div>
-            <div class="result-item" id="resIspRow" style="display:none;">
-                <span class="result-label">运营商</span>
-                <span class="result-value" id="resIsp">-</span>
-            </div>
-            <div class="result-item" id="resOrgRow" style="display:none;">
-                <span class="result-label">组织</span>
-                <span class="result-value" id="resOrg">-</span>
-            </div>
-            <div class="data-source" id="resDataSource"></div>
-        </div>
-        <div class="api-info">
-            <h3>API 接口</h3>
-            <p><code>GET /api/ip/lookup?ip=8.8.8.8</code> - 查询单个IP</p>
-            <p><code>POST /api/ip/batch</code> - 批量查询（最多100个）</p>
-        </div>
+        <p>输入IP地址获取归属信息</p>
     </div>
+    
+    <div class="main">
+        <div class="search-area">
+            <div class="search-box">
+                <input type="text" id="ipInput" placeholder="输入IP地址，留空查询当前IP">
+                <button id="queryBtn" onclick="queryIP()">查询</button>
+            </div>
+        </div>
+        
+        <div class="error" id="errorBox"></div>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <span>查询中...</span>
+        </div>
+        
+        <div class="result" id="resultBox">
+            <div class="card">
+                <div class="card-section">
+                    <div class="section-title">基本信息</div>
+                    <div class="info-row">
+                        <span class="info-label">IP</span>
+                        <span class="info-value" id="resIp">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">类型</span>
+                        <span class="info-value" id="resIpType">-</span>
+                    </div>
+                </div>
+                
+                <div class="card-section">
+                    <div class="section-title">地理位置</div>
+                    <div class="grid">
+                        <div class="info-row">
+                            <span class="info-label">国家</span>
+                            <span class="info-value" id="resCountry">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">省份</span>
+                            <span class="info-value" id="resProvince">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">城市</span>
+                            <span class="info-value" id="resCity">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">邮编</span>
+                            <span class="info-value" id="resPostal">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">时区</span>
+                            <span class="info-value" id="resTimezone">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">经纬</span>
+                            <span class="info-value" id="resCoords">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card-section">
+                    <div class="section-title">机构信息</div>
+                    <div class="info-row" id="resOrgTypeRow" style="display:none;">
+                        <span class="info-label">类型</span>
+                        <span class="info-value" id="resOrgType">-</span>
+                    </div>
+                    <div class="info-row" id="resOrgNameRow" style="display:none;">
+                        <span class="info-label">机构</span>
+                        <span class="info-value" id="resOrgName">-</span>
+                    </div>
+                    <div class="info-row" id="resIspRow" style="display:none;">
+                        <span class="info-label">运营商</span>
+                        <span class="info-value" id="resIsp">-</span>
+                    </div>
+                    <div class="info-row" id="resOrgRow" style="display:none;">
+                        <span class="info-label">组织</span>
+                        <span class="info-value" id="resOrg">-</span>
+                    </div>
+                </div>
+                
+                <div class="data-source" id="resDataSource"></div>
+            </div>
+        </div>
+        
+        <div class="copyright">Copyright © 2026 南昌市星纬智创科技有限公司</div>
+    </div>
+
     <script>
         async function queryIP() {
             const ip = document.getElementById('ipInput').value.trim();
             const errorBox = document.getElementById('errorBox');
             const loading = document.getElementById('loading');
             const resultBox = document.getElementById('resultBox');
+            const queryBtn = document.getElementById('queryBtn');
 
             errorBox.classList.remove('show');
             resultBox.classList.remove('show');
             loading.classList.add('show');
+            queryBtn.disabled = true;
+            queryBtn.textContent = '查询中';
 
             try {
                 const url = ip ? `/api/ip/lookup?ip=${encodeURIComponent(ip)}` : '/api/ip/lookup';
@@ -823,38 +919,20 @@ HTML_TEMPLATE = """
                 const data = await res.json();
 
                 loading.classList.remove('show');
+                queryBtn.disabled = false;
+                queryBtn.textContent = '查询';
 
                 if (data.success) {
                     const d = data.data;
                     document.getElementById('resIp').textContent = d.ip;
                     
                     const ipTypeEl = document.getElementById('resIpType');
-                    if (d.is_private) {
-                        ipTypeEl.innerHTML = '<span class="result-tag tag-private">内网/私网</span>';
+                    if (d.ip_type === 'loopback') {
+                        ipTypeEl.innerHTML = '<span class="tag tag-loopback">回环地址（本机）</span>';
+                    } else if (d.is_private) {
+                        ipTypeEl.innerHTML = '<span class="tag tag-private">内网/私网</span>';
                     } else {
-                        ipTypeEl.innerHTML = '<span class="result-tag tag-public">公网</span>';
-                    }
-                    
-                    const descRow = document.getElementById('resDescRow');
-                    if (d.description) {
-                        descRow.style.display = 'flex';
-                        document.getElementById('resDesc').textContent = d.description;
-                    } else {
-                        descRow.style.display = 'none';
-                    }
-                    
-                    const orgTypeRow = document.getElementById('resOrgTypeRow');
-                    const orgNameRow = document.getElementById('resOrgNameRow');
-                    if (d.organization) {
-                        orgTypeRow.style.display = 'flex';
-                        orgNameRow.style.display = 'flex';
-                        const orgTypeEl = document.getElementById('resOrgType');
-                        const typeClass = 'tag-' + d.organization.type;
-                        orgTypeEl.innerHTML = '<span class="result-tag ' + typeClass + '">' + d.organization.type_name + '</span>';
-                        document.getElementById('resOrgName').textContent = d.organization.name;
-                    } else {
-                        orgTypeRow.style.display = 'none';
-                        orgNameRow.style.display = 'none';
+                        ipTypeEl.innerHTML = '<span class="tag tag-public">公网</span>';
                     }
                     
                     document.getElementById('resCountry').textContent = d.country?.name || '-';
@@ -866,6 +944,19 @@ HTML_TEMPLATE = """
                     const lon = d.location?.longitude;
                     document.getElementById('resCoords').textContent = 
                         (lat !== undefined && lon !== undefined) ? `${lat}, ${lon}` : '-';
+                    
+                    const orgTypeRow = document.getElementById('resOrgTypeRow');
+                    const orgNameRow = document.getElementById('resOrgNameRow');
+                    if (d.organization) {
+                        orgTypeRow.style.display = 'flex';
+                        orgNameRow.style.display = 'flex';
+                        const typeClass = 'tag-' + d.organization.type;
+                        document.getElementById('resOrgType').innerHTML = '<span class="tag ' + typeClass + '">' + d.organization.type_name + '</span>';
+                        document.getElementById('resOrgName').textContent = d.organization.name;
+                    } else {
+                        orgTypeRow.style.display = 'none';
+                        orgNameRow.style.display = 'none';
+                    }
                     
                     const ispRow = document.getElementById('resIspRow');
                     if (d.isp) {
@@ -885,12 +976,12 @@ HTML_TEMPLATE = """
                     
                     const dataSourceEl = document.getElementById('resDataSource');
                     const sourceMap = {
-                        'geolite2': 'GeoLite2 本地数据库',
-                        'ip-api.com': 'ip-api.com 在线API',
-                        'geolite2 + ip-api.com': 'GeoLite2 + ip-api.com',
-                        'local': '本地识别'
+                        'geolite2': '数据来源: GeoLite2',
+                        'ip-api.com': '数据来源: ip-api.com',
+                        'geolite2 + ip-api.com': '数据来源: GeoLite2 + ip-api.com',
+                        'local': '数据来源: 本地识别'
                     };
-                    dataSourceEl.textContent = '数据来源: ' + (sourceMap[d.data_source] || d.data_source || '未知');
+                    dataSourceEl.textContent = sourceMap[d.data_source] || '数据来源: 未知';
                     
                     resultBox.classList.add('show');
                 } else {
@@ -899,6 +990,8 @@ HTML_TEMPLATE = """
                 }
             } catch (e) {
                 loading.classList.remove('show');
+                queryBtn.disabled = false;
+                queryBtn.textContent = '查询';
                 errorBox.textContent = '查询失败: ' + e.message;
                 errorBox.classList.add('show');
             }
@@ -912,5 +1005,22 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def run_flask(port):
+    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    init_geolite2()
+    port = find_free_port()
+    
+    flask_thread = threading.Thread(target=run_flask, args=(port,), daemon=True)
+    flask_thread.start()
+    
+    try:
+        import webview
+        webview.create_window("IP地址归属地查询", f"http://127.0.0.1:{port}", width=700, height=960)
+        webview.start()
+    except ImportError:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, f"服务已启动，请在浏览器中访问 http://127.0.0.1:{port}", "IP地址归属地查询", 0)
+        flask_thread.join()

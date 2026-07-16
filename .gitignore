@@ -7,6 +7,9 @@ env/
 build/
 develop-eggs/
 dist/
+installer/
+*.spec
+GeoLite2-City.mmdb
 downloads/
 eggs/
 .eggs/
